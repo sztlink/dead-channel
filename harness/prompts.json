@@ -1,0 +1,19 @@
+{
+  "version": "f0-v1",
+  "note": "Conjunto fixo de prompts do dit-score. NUNCA editar itens existentes; só adicionar com bump de version.",
+  "prompts": [
+    {"id": "photo-fox", "text": "a fox walking in the snow, cinematic lighting, photorealistic"},
+    {"id": "portrait", "text": "studio portrait of an elderly fisherman with deep wrinkles, dramatic rembrandt lighting, 85mm photo"},
+    {"id": "text-render", "text": "a neon sign on a rainy brick wall that reads \"KREA LAB\" in cursive pink letters, night photography"},
+    {"id": "illustration", "text": "flat vector illustration of a lighthouse on a cliff at sunset, minimal geometric shapes, warm palette"},
+    {"id": "complex-scene", "text": "a crowded street market in Sao Paulo at dusk, vendors, string lights, motion blur of passersby, documentary photo"},
+    {"id": "texture-detail", "text": "macro photograph of frost crystals forming on a green leaf, extreme detail, shallow depth of field"},
+    {"id": "low-light", "text": "a dimly lit jazz club interior, saxophone player silhouetted against smoky purple stage light"},
+    {"id": "geometry", "text": "isometric cutaway of a three-story brutalist concrete house, architectural rendering, clean lines"},
+    {"id": "anatomy-hands", "text": "two hands playing a grand piano, fingers on keys, natural skin texture, overhead shot"},
+    {"id": "painterly", "text": "impressionist oil painting of a wheat field under a storm sky, thick visible brushstrokes"},
+    {"id": "surreal", "text": "a whale floating above a desert highway at noon, hyperrealistic, hard shadows"},
+    {"id": "product", "text": "product photo of a matte black mechanical watch on white background, softbox reflections, high key"}
+  ],
+  "seeds": [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007]
+}

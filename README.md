@@ -1,0 +1,82 @@
+# dit-score
+
+Post-quantization fidelity benchmarks for diffusion transformers. Measured, not quoted.
+
+Sibling of [kv-score](https://github.com/sztlink/kv-score), which does the same job for LLM KV-cache quantization. The field publishes speedups with a single self-reported fidelity table, usually one seed, usually no failure analysis. This repo measures fidelity the way it should be measured. Multi-seed, versioned prompts, paired against a full-precision reference, with the measurement conditions attached to every number.
+
+## Study 1 . Krea 2 Turbo quant formats on RTX 4090 (2026-07-16)
+
+[Krea 2](https://www.krea.ai/blog/krea-2-technical-report) is a 12.9B single-stream DiT with GQA attention, open weights since June 2026. Comfy-Org ships five quantized variants of the Turbo checkpoint. Nobody published a fidelity comparison between them. Here is one.
+
+Setup. RTX 4090 24GB (Ada), ComfyUI master headless, torch 2.13 cu130, WSL2. 1024x1024, euler/simple, cfg 1.0. Reference is the BF16 checkpoint at 8 steps running with partial CPU offload. 12 prompts x 8 seeds gives n=96 pairs per variant, seed-locked to the reference. Prompts and seeds are versioned in [`harness/prompts.json`](harness/prompts.json) and never edited in place.
+
+| variant | LPIPS (alex) | PSNR | ImageReward delta | s/img (batch) |
+|---|---|---|---|---|
+| **int8 convrot, 8 steps** | **0.066 +-0.055** | **27.7** | **-0.010** | ~4.3* |
+| mxfp8, 8 steps | 0.115 +-0.080 | 24.0 | +0.004 | ~9.4* |
+| fp8 scaled, 8 steps | 0.120 +-0.076 | 23.6 | -0.024 | 6.3 |
+| fp8 scaled, 4 steps | 0.326 +-0.092 | 17.8 | -0.054 | 3.4 |
+| fp8 scaled, 2 steps | 0.531 +-0.155 | 15.0 | **-0.523** | 2.3 |
+
+*int8 and mxfp8 batch times ran under different loading conditions than the fp8 rows. Warm per-config latency needs a dedicated sweep before speed claims. Raw per-pair scores live in [`results/`](results/2026-07-16-krea2-turbo-rtx4090/).
+
+### What the table says
+
+**Rotation wins.** The int8 convrot variant, which rotates activations before quantizing in the QuaRot family tradition, is the most faithful quant of the five by a wide margin. Half the LPIPS of fp8 scaled, 4dB more PSNR, ImageReward delta indistinguishable from zero. On Ada hardware, where NVFP4 does not exist, rotation-based int8 currently beats both fp8 paths on fidelity.
+
+**Steps are the expensive axis, not bits.** Dropping from 8 to 4 steps costs more fidelity than any quantization format here. Dropping to 2 steps collapses quality entirely, with ImageReward delta at -0.52. The Turbo checkpoint was distilled for 8 steps and it shows.
+
+**A methodology note.** For step reduction, LPIPS measures trajectory divergence rather than quality loss. The 4-step image is a different composition, not a degraded one. ImageReward delta is the quality signal there, and at 4 steps it reads mild (-0.054) while LPIPS reads dramatic (0.326). Reading only one metric misleads in opposite directions depending on the axis. This distinction is absent from most published tables.
+
+### Failure modes have signatures
+
+Quantization hurts low-light scenes, fine texture and product shots. Step reduction hurts painterly styles hardest, with visible brushstroke structure the first casualty. The worst-case pairs per variant are listed in each results JSON.
+
+![painterly, step collapse](samples/grid-painterly-step-collapse.png)
+*Same seed, same prompt. BF16 ref, int8 convrot, mxfp8, then fp8 at 8, 4 and 2 steps. The painterly prompt survives every quant format at 8 steps and dies with step reduction.*
+
+![low light, quant pain](samples/grid-lowlight-quant-pain.png)
+*Low light is where quantization formats separate from each other.*
+
+## Latency baseline (fp8 scaled, warm, same GPU)
+
+| resolution | steps | s/img | DiT step |
+|---|---|---|---|
+| 1024 | 8 | 5.5 | 613ms |
+| 1024 | 2 | 1.56 | |
+| 768 | 8 | 2.96 | 329ms |
+| 512 | 8 | 1.43 | 158ms |
+| 512 | 2 | 0.42 | |
+
+Step time scales near-linearly with token count at these resolutions (4x tokens costs 3.9x time), so the model is GEMM-bound rather than attention-bound here. ComfyUI's `--fast` fp8 matmul path adds only 13 to 15 percent on Ada. Most of the quantization speedup remains unharvested on this hardware, which is the motivation for the W4A4 work below.
+
+## Run it
+
+```bash
+# score a variant directory against a reference directory
+# images paired by filename: {prompt_id}__{seed}.png
+python harness/dit_score.py \
+  --reference out/ref-bf16-1024-8s \
+  --variant   out/int8convrot-1024-8s \
+  --prompts   harness/prompts.json \
+  --out       scores/int8convrot.json
+```
+
+Requires torch, lpips, image-reward and a pinned transformers 4.49 (ImageReward's BLIP breaks on newer). Generation scripts for the ComfyUI API are in `harness/`.
+
+## Caveats
+
+- Single GPU, single day, one model family. Ampere numbers (RTX 3090) are next.
+- The BF16 reference itself runs with partial offload on 24GB. Bit-identical BF16 on larger VRAM was not verified against it.
+- Batch s/img figures include VAE decode, text encode cache hits and HTTP overhead. Only the fp8 rows come from a controlled warm sweep.
+- ImageReward is one reward model with known style biases. It anchors the quality axis here, it does not close the question.
+
+## Roadmap
+
+- W4A4 (SVDQuant-style) quantization of Krea 2 in the [Nunchaku](https://github.com/nunchaku-ai/nunchaku) runtime, with this harness as the fidelity gate.
+- Ampere (RTX 3090) numbers for every variant. No official benchmarks exist for that hardware.
+- Composition of W4A4 with temporal feature caching for streaming img2img.
+
+## Who
+
+I build low-level inference for image models and installations that run on them. More at [felipesztutman.com/lab](https://felipesztutman.com/lab).
