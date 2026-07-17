@@ -1,10 +1,12 @@
-# dit-score
+# Dead Channel
+
+> *the sky was the color of television, tuned to a dead channel.*
 
 ![license](https://img.shields.io/badge/license-MIT-blue) ![data](https://img.shields.io/badge/raw%20per--pair%20scores-in%20results%2F-brightgreen) ![gpu](https://img.shields.io/badge/measured%20on-RTX%204090-76b900)
 
-Post-quantization fidelity benchmarks for diffusion transformers. Measured, not quoted.
+Measuring where diffusion quantization tunes to static. Post-quantization fidelity and latency for diffusion transformers, measured not quoted.
 
-Every aggregate number in this README traces to raw per-pair JSON in [`results/`](results/). Mirror of the result data on Hugging Face at [felipesztutman/dit-score-results](https://huggingface.co/datasets/felipesztutman/dit-score-results).
+Every aggregate number in this README traces to raw per-pair JSON in [`results/`](results/). Mirror of the result data on Hugging Face at [felipesztutman/dead-channel-results](https://huggingface.co/datasets/felipesztutman/dead-channel-results).
 
 Sibling of [kv-score](https://github.com/sztlink/kv-score), which does the same job for LLM KV-cache quantization. The field publishes speedups with a single self-reported fidelity table, usually one seed, usually no failure analysis. This repo measures fidelity the way it should be measured. Multi-seed, versioned prompts, paired against a full-precision reference, with the measurement conditions attached to every number.
 
