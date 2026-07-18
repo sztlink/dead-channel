@@ -79,7 +79,32 @@ The tables above are all storage-quantized formats running through ComfyUI's gen
 | Nunchaku INT4 FLUX.1-dev (fused W4A4) | **~0.54s** |
 | ComfyUI fp8 Krea 2 Turbo (storage fp8) | ~1.9s |
 
-Both are 12B-class DiTs on the same card, so this is a cross-model indication rather than a controlled same-model A/B (a FLUX fp8/bf16 baseline on this card is still TODO). But the gap is stark: the fused W4A4 path runs roughly **3.5x faster per step** than the fp8-storage path. This is the empirical case for porting Krea 2 to a fused W4A4 runtime rather than settling for storage quantization, which is exactly the [W4A4 work in progress](#roadmap).
+Both are 12B-class DiTs on the same card, so this is a cross-model indication rather than a controlled same-model A/B (a FLUX fp8/bf16 baseline on this card is still TODO). But the gap is stark: the fused W4A4 path runs roughly **3.5x faster per step** than the fp8-storage path. This is the empirical case for porting Krea 2 to a fused W4A4 runtime rather than settling for storage quantization, and [Study 3](#study-3--w4a4-krea-2-turbo-first-measured-2026-07-18) takes the first step by measuring the fidelity.
+
+## Study 3 . W4A4 Krea 2 Turbo, first measured (2026-07-18)
+
+Every format in Study 1 is storage quantization. It shrinks the checkpoint and the memory, it does not touch the arithmetic of the forward pass. Study 2 showed, on a different model, that the *fused* W4A4 path runs about 3.5x faster per step because it rewrites that arithmetic. The obvious question is whether Krea 2 itself survives four-bit weights and four-bit activations. Nobody had quantized it that far, so there was no fidelity number to cite. Here is the first one.
+
+Setup. SVDQuant W4A4 through [deepcompressor](https://github.com/mit-han-lab/deepcompressor), calibrated on an H100 with 128 samples, smoothing plus a rank-32 low-rank branch that carries the outliers the 4-bit matmul cannot hold. The gated-attention output projection is quantized as a sibling of qkv. Guidance fixed at 0.0 because the Turbo checkpoint is cfg-distilled. Scored on the same RTX 4090 as Study 1, same 12 prompts x 8 seeds, seed-locked against the same BF16 reference. Raw per-pair scores in [`results/2026-07-18-krea2-w4a4/`](results/2026-07-18-krea2-w4a4/).
+
+| variant | LPIPS (alex) | PSNR | ImageReward delta | forward pass |
+|---|---|---|---|---|
+| int8 convrot, 8 steps | 0.066 +-0.055 | 27.7 | -0.010 | storage |
+| fp8 scaled, 8 steps | 0.120 +-0.076 | 23.6 | -0.024 | storage |
+| **w4a4 svdquant, 8 steps** | **0.268 +-0.107** | **18.0** | **+0.052** | **fused** |
+| fp8 scaled, 4 steps | 0.326 +-0.092 | 17.8 | -0.054 | storage |
+
+### What the table says
+
+**Quality did not fall. It rose.** The ImageReward delta of +0.052 is the highest of any variant measured here, storage or fused. On average the reward model preferred the 4-bit images to BF16. Four-bit weights and four-bit activations, and the quality signal went up, not down.
+
+**The trajectory moves, and that is the whole cost.** LPIPS 0.268 lands near the fp8 4-step build, so the sampling path shifts to a neighboring composition. But unlike step reduction, which drags ImageReward down with it, W4A4 holds quality while it shifts. This is the signature of SVDQuant. The low-rank branch absorbs the activation outliers that grow block by block through the DiT (calibration error climbed monotonically from ~9700 at block 1 to ~28000 at block 27, and the branch soaked it up), so the predicted last-block collapse never appeared in the images.
+
+**This is the only row that buys real time.** int8 convrot wins pure fidelity and stays the right default for storage quant on Ampere. But it runs through the general forward path. W4A4 is the only quantization here that rewrites the matmul into the fused low-bit kernel that turns into the ~3.5x of Study 2. The others make the file smaller. This one makes the machine faster.
+
+### Failure modes
+
+Fine texture is where W4A4 diverges most. The worst pairs are the `texture-detail` and `geometry` prompts (LPIPS up to 0.60), where the trajectory shift rewrites high-frequency structure. Portraits and painterly scenes hold closest to the reference. Full worst-case list in the results JSON.
 
 ## Run it
 
@@ -104,8 +129,9 @@ Requires torch, lpips, image-reward and a pinned transformers 4.49 (ImageReward'
 
 ## Roadmap
 
-- W4A4 (SVDQuant-style) quantization of Krea 2 in the [Nunchaku](https://github.com/nunchaku-ai/nunchaku) runtime, with this harness as the fidelity gate.
-- Ampere (RTX 3090) numbers for every variant. No official benchmarks exist for that hardware.
+- **Port the measured W4A4 checkpoint into a fused runtime.** Study 3 proves the fidelity holds. Next is running it through [Nunchaku](https://github.com/nunchaku-ai/nunchaku) on the 3090/4090 to convert the ~3.5x of Study 2 into real frames, with this harness as the gate at every step.
+- **Variable-bit W4A4, allocated per block from measured need.** Study 3 quantizes every block to the same 4 bits. The calibration error climbs ~2.9x from first block to last, which says the bit budget is misallocated. A data-driven per-block allocation, spending bits where the DiT actually needs them, is the obvious next lever. This borrows directly from [@spiritbuun's VBR](https://x.com/spiritbuun) format for LLM KV caches, which does exactly this layer by layer, and from the depth-resolved harm profiling in [kv-score](https://github.com/sztlink/kv-score).
+- Ampere (RTX 3090) numbers for every storage variant. No official benchmarks exist for that hardware.
 - Composition of W4A4 with temporal feature caching for streaming img2img.
 
 ## Who
