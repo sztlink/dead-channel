@@ -96,7 +96,9 @@ Setup. SVDQuant W4A4 through [deepcompressor](https://github.com/mit-han-lab/dee
 
 ### What the table says
 
-**Quality did not fall. It rose.** The ImageReward delta of +0.052 is the highest of any variant measured here, storage or fused. On average the reward model preferred the 4-bit images to BF16. Four-bit weights and four-bit activations, and the quality signal went up, not down.
+**The reward model likes it more, and that is not the same as better.** The ImageReward delta of +0.052 is the highest of any variant measured here, storage or fused. I do not read that as four-bit beating full precision. A reward model is a learned preference with well-known failure modes, and the likelier reading is that quantization nudged the sampling trajectory into a more prototypical basin, closer to the kind of image the reward model was trained to reward. Reading a positive delta as a quality gain is exactly the trap this benchmark exists to avoid.
+
+What the number does support is the narrower and more useful claim: **quality did not degrade.** Whatever four-bit costs, it does not show up as a penalty this reward model can see, which is the opposite of what step reduction does (-0.523 at 2 steps).
 
 **The trajectory moves, and that is the whole cost.** LPIPS 0.268 lands near the fp8 4-step build, so the sampling path shifts to a neighboring composition. But unlike step reduction, which drags ImageReward down with it, W4A4 holds quality while it shifts. This is the signature of SVDQuant. The low-rank branch absorbs the activation outliers that grow block by block through the DiT (calibration error climbed monotonically from ~9700 at block 1 to ~28000 at block 27, and the branch soaked it up), so the predicted last-block collapse never appeared in the images.
 
