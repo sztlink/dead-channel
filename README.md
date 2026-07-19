@@ -112,7 +112,14 @@ Study 3 measured the fidelity of a W4A4 Krea 2 checkpoint through a fake-quantiz
 
 Setup. The 28 heavy transformer blocks are quantized (q/k/v/gate fused into one group, matching how the checkpoint was calibrated), everything else stays bf16. Measured on an L40S (Ada, the same generation as the 4090), 1024 and 512 px, guidance 0.0, warm timing, paired seed to seed against the bf16 model on the same card.
 
-**It generates correct images.** Across six prompts the W4A4 output is coherent and detailed, visually indistinguishable in quality from bf16. Mean LPIPS 0.277 against bf16 (0.14 on a clean portrait, 0.33 to 0.36 on fine texture and dense cityscape), which tracks Study 3's fake-quant number of 0.268. The higher-LPIPS prompts shift their composition, they do not lose quality.
+**It generates correct images.** Measured on the same 12 versioned prompts and 8 seeds as Studies 1 to 3, paired seed to seed against bf16 on the same card, 96 pairs per resolution.
+
+| | LPIPS | PSNR | ImageReward delta | n |
+|---|---|---|---|---|
+| 1024px | 0.276 +-0.105 | 17.7 | +0.078 | 96 |
+| 512px | 0.226 +-0.090 | 18.4 | -0.013 | 96 |
+
+The perceptual distance at 1024px lands on Study 3's fake-quant prediction of 0.268, which is the strongest evidence that the fused runtime reproduces the calibration it was built from. ImageReward is positive at 1024 and flat at 512, so quality did not degrade, it moved a touch the other way. At 512px, the resolution a streaming pipeline would actually run, fidelity is better than at 1024. Per prompt the pattern is the one this benchmark keeps finding, hands and dense scenes and low light diverge most (0.35 to 0.37), portraits and product shots hold closest (0.14 to 0.20). The high-LPIPS prompts shift their composition, they do not lose quality.
 
 ![bf16 vs W4A4 fox](samples/foxpair-bf16-w4a4.png)
 *Same seed, same prompt. bf16 left, four-bit W4A4 right. LPIPS 0.14.*
@@ -120,16 +127,29 @@ Setup. The 28 heavy transformer blocks are quantized (q/k/v/gate fused into one 
 ![bf16 vs W4A4 across five prompts](samples/grid-w4a4-fused-runtime.png)
 *bf16 left, W4A4 right, five prompts. Quality holds. The prompts that move most (texture, dense cityscape) shift their composition, they do not degrade.*
 
+Latency, warm median of 3 seeds, both models running the same expanded-head attention path so the difference is the four-bit arithmetic alone:
+
 | resolution, steps | W4A4 | bf16 | speedup |
 |---|---|---|---|
-| 1024px, 8 steps | 5.38s | 7.51s | 1.40x |
-| 512px, 8 steps | 1.35s | 2.19s | 1.63x |
-| 512px, 4 steps | 0.71s | — | 1.40 img/s |
-| 512px, 2 steps | 0.41s | — | 2.47 img/s |
+| 1024px, 8 steps | 5.36s | 7.71s | 1.44x |
+| 512px, 8 steps | 1.34s | 2.19s | 1.63x |
+| 512px, 4 steps | 0.73s | n/a | 1.38 img/s |
+| 512px, 2 steps | 0.41s | n/a | 2.45 img/s |
 
-Both columns run FlashAttention, so the speedup is the four-bit GEMM benefit alone, 1.4x at 1024 and 1.63x at 512. It grows as resolution drops because attention shrinks and the quantized matmuls take a larger share.
+Both columns run FlashAttention, so the speedup is the four-bit arithmetic alone, 1.44x at 1024 and 1.63x at 512. It grows as resolution drops because attention shrinks and the quantized matmuls take a larger share. A separate 3x sits on top of both columns and is described below, which is why getting the attention path right mattered more than the quantization did.
 
-One note on getting there, because it cost a day. The first port ran four times slower than the numbers above, and a profile blamed attention sitting in the slow math backend. The reason was mundane. The q/k tensors had drifted to fp32, and fp32 has no FlashAttention kernel, so scaled dot product attention falls back silently and materializes the full matrix. Casting them back to bfloat16 fixes it. I first blamed the grouped-query flag and an ablation proved me wrong, which is why the tables above have both columns on the same attention backend. It is a self-inflicted bug more than a finding, but the failure mode is worth knowing. Attention inputs that drift to fp32 lose FlashAttention and nothing warns you.
+### The grouped-query flag costs 3x when a mask is present
+
+The first port ran at 20 seconds for eight steps and a profile put six of every eight seconds inside attention, in the math backend. The cause is a one-line trap. Krea 2 uses grouped-query attention, 48 query heads against 12 key/value heads, and the natural way to express that is `enable_gqa=True` on PyTorch's scaled dot product attention. Krea 2 also always hands attention a mask, because text and image tokens share one sequence. Flash does not serve those two together. Pass both and SDPA drops to the math backend, materializes the full attention matrix, and nothing warns you. Expanding the 12 key/value heads up to 48 by hand and calling plain multi-head attention lets FlashAttention engage with the mask still in place.
+
+A four-way ablation on the real pipeline, 1024px and 8 steps, isolates it:
+
+| | plain | with dtype cast |
+|---|---|---|
+| enable_gqa=True | 22.3s | 22.4s |
+| expand k/v heads | 7.7s | 7.8s |
+
+The expansion is the whole effect, about 3x. A dtype cast I had suspected makes no measurable difference. I want to flag how I got this wrong first, because it is the useful part. I originally blamed the flag, then ran an ablation on scaled dot product attention in isolation, saw `enable_gqa` reach the flash backend fine, and corrected myself to a dtype story. That isolated test had no attention mask, so it did not reproduce the condition that matters. Only the ablation inside the real pipeline, with the mask the model actually passes, settles it. The lesson is not about this model. Any GQA transformer that also masks will silently lose FlashAttention through that flag.
 
 ### Where the rest of the speedup lives
 
