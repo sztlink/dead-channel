@@ -106,6 +106,31 @@ Setup. SVDQuant W4A4 through [deepcompressor](https://github.com/mit-han-lab/dee
 
 Fine texture is where W4A4 diverges most. The worst pairs are the `texture-detail` and `geometry` prompts (LPIPS up to 0.60), where the trajectory shift rewrites high-frequency structure. Portraits and painterly scenes hold closest to the reference. Full worst-case list in the results JSON.
 
+## Study 4 . The W4A4 build runs in a fused runtime (2026-07-19)
+
+Study 3 measured the fidelity of a W4A4 Krea 2 checkpoint through a fake-quantized forward pass. That answers whether the quality survives, not whether the build runs. So I ported Krea 2 into the [Nunchaku](https://github.com/nunchaku-tech/nunchaku) W4A4 runtime and ran it. This is the first time Krea 2 has run with four-bit weights and activations through fused low-bit kernels.
+
+Setup. The 28 heavy transformer blocks are quantized (q/k/v/gate fused into one group, matching how the checkpoint was calibrated), everything else stays bf16. Measured on an L40S (Ada, the same generation as the 4090), 1024 and 512 px, guidance 0.0, warm timing, paired seed to seed against the bf16 model on the same card.
+
+**It generates correct images.** Across six prompts the W4A4 output is coherent and detailed, visually indistinguishable in quality from bf16. Mean LPIPS 0.277 against bf16 (0.14 on a clean portrait, 0.33 to 0.36 on fine texture and dense cityscape), which tracks Study 3's fake-quant number of 0.268. The higher-LPIPS prompts shift their composition, they do not lose quality.
+
+| resolution, steps | W4A4 | bf16 | speedup |
+|---|---|---|---|
+| 1024px, 8 steps | 5.38s | 7.51s | 1.40x |
+| 512px, 8 steps | 1.35s | 2.19s | 1.63x |
+| 512px, 4 steps | 0.71s | — | 1.40 img/s |
+| 512px, 2 steps | 0.41s | — | 2.47 img/s |
+
+Both columns run FlashAttention, so the speedup is the four-bit GEMM benefit alone, 1.4x at 1024 and 1.63x at 512. It grows as resolution drops because attention shrinks and the quantized matmuls take a larger share.
+
+### The attention backend was the whole ballgame
+
+The first port ran at 20 seconds for eight steps, four times slower than this. A profile showed the reason. The grouped-query attention was passing `enable_gqa=True` to PyTorch's scaled dot product attention, which silently falls back to the math backend, materializes the full attention matrix, and eats 6 of every 8 seconds. Expanding the 12 key/value heads up to the 48 query heads by hand and calling standard SDPA lets FlashAttention engage. That one change is a 3.8x speedup at 1024px, and it applies to any GQA diffusion transformer running through diffusers, bf16 or quantized.
+
+### Where the rest of the speedup lives
+
+This runtime keeps normalization, rotary and the attention itself eager and only the matmuls are fused, so the four-bit win is partly masked by per-projection activation quantization. Folding the quantize, the matmul, the q/k norm and rotary into a single kernel (the pattern Nunchaku already uses for other models) is the next lever. For Krea 2 it needs the sigmoid gate handled inside that fused path, which is the kernel-level work this study sets up.
+
 ## Run it
 
 ```bash
