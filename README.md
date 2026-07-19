@@ -123,9 +123,7 @@ Setup. The 28 heavy transformer blocks are quantized (q/k/v/gate fused into one 
 
 Both columns run FlashAttention, so the speedup is the four-bit GEMM benefit alone, 1.4x at 1024 and 1.63x at 512. It grows as resolution drops because attention shrinks and the quantized matmuls take a larger share.
 
-### The attention backend was the whole ballgame
-
-The first port ran at 20 seconds for eight steps, four times slower than this. A profile put the blame on attention, six of every eight seconds in the math backend. My first guess was the grouped-query path, and an ablation proved that guess wrong, which is the point of running one. The real cause is dtype. Krea 2's q/k RMSNorm is computed in fp32, and fp32 query and key tensors have no FlashAttention kernel, so scaled dot product attention silently drops to the math backend and materializes the full attention matrix. Casting q and k back to bfloat16 before attention lets FlashAttention engage, a 3.8x speedup at 1024px. The same ablation confirmed the grouped-query flag is fine on the flash backend once the tensors are bf16. The lesson outlives this model. Any attention whose inputs drift to fp32, a routine side effect of keeping norms in fp32, quietly loses FlashAttention, and nothing warns you.
+One note on getting there, because it cost a day. The first port ran four times slower than the numbers above, and a profile blamed attention sitting in the slow math backend. The reason was mundane. The q/k tensors had drifted to fp32, and fp32 has no FlashAttention kernel, so scaled dot product attention falls back silently and materializes the full matrix. Casting them back to bfloat16 fixes it. I first blamed the grouped-query flag and an ablation proved me wrong, which is why the tables above have both columns on the same attention backend. It is a self-inflicted bug more than a finding, but the failure mode is worth knowing. Attention inputs that drift to fp32 lose FlashAttention and nothing warns you.
 
 ### Where the rest of the speedup lives
 
