@@ -112,6 +112,8 @@ Fine texture is where W4A4 diverges most. The worst pairs are the `texture-detai
 
 Study 3 measured the fidelity of a W4A4 Krea 2 checkpoint through a fake-quantized forward pass. That answers whether the quality survives, not whether the build runs. So I ported Krea 2 into the [Nunchaku](https://github.com/nunchaku-tech/nunchaku) W4A4 runtime and ran it. This is the first time Krea 2 has run with four-bit weights and activations through fused low-bit kernels.
 
+Both halves are open. The checkpoint is at [felipesztutman/Krea-2-Turbo-W4A4-Nunchaku](https://huggingface.co/felipesztutman/Krea-2-Turbo-W4A4-Nunchaku), the runtime port and the deepcompressor conversion path are at [sztlink/krea2-nunchaku](https://github.com/sztlink/krea2-nunchaku). No new CUDA was needed, the existing Nunchaku kernels already serve this shape, so the port is 213 lines of Python against them.
+
 Setup. The 28 heavy transformer blocks are quantized (q/k/v/gate fused into one group, matching how the checkpoint was calibrated), everything else stays bf16. Measured on an L40S (Ada, the same generation as the 4090), 1024 and 512 px, guidance 0.0, warm timing, paired seed to seed against the bf16 model on the same card.
 
 **It generates correct images.** Measured on the same 12 versioned prompts and 8 seeds as Studies 1 to 3, paired seed to seed against bf16 on the same card, 96 pairs per resolution.
